@@ -2,11 +2,9 @@
 
 > Ответственный: Шаимов Богдан | Проверено по коду: RNG_brenсh2d2f164
 
-## 1. Текущая структура (AS-IS)
+## 1. Схема компонентов и потоков данных модуля (AS-IS)
 
 Кратко: показано внутреннее устройство модуля `RNG.py` (v1.2.0) в ветке `RNG_brench`. Фасад `RandomGenerator` управляет созданием потоков и в зависимости от параметра `engine` делегирует генерацию одному из трёх классов: `RngStream` (`MRG32k3a`), `PhiloxStream` (`Philox4x64`) или `DataStream` (чтение `.json`/`.csv`).
-
-### 1.1. Схема компонентов и потоков данных модуля (AS-IS)
 
 ```mermaid
 flowchart LR
@@ -33,81 +31,6 @@ flowchart LR
     PARAMS -->|"__init__()"| RG
     FILES -->|"_load_data()"| DS
     RG --> OUT
-```
-
-### 1.2. UML-диаграмма классов модуля RNG.py (AS-IS)
-
-```mermaid
-classDiagram
-    class RandomGenerator {
-        +int seed
-        +int base_stream_idx
-        +int run_idx
-        +str engine
-        +str filepath
-        -dict _streams
-        -dict _normal_cache
-        +__init__(seed, base_stream_idx, run_idx, engine, filepath)
-        -_get_stream(stream_offset) RngStream|PhiloxStream|DataStream
-        +uniform(min_val, max_val, stream_offset) float
-        +normal(mean, variance, bound, stream_offset) float
-        +exponential(mean, bound, stream_offset) float
-        +get_integer(min_val, max_val, stream_offset) int
-    }
-
-    class RngStream {
-        +float m1$
-        +float m2$
-        +float norm$
-        -bool _cache_built$
-        -list _cache_A1$
-        -list _cache_A2$
-        +int seed
-        +int stream_idx
-        +int run_idx
-        +list~float~ state
-        +__init__(seed, stream_idx, run_idx)
-        +_build_cache()$ void
-        +rand_u01() float
-        -_mult_mod_m(a, s, c, m)$ float
-        -_mat_vec_mod_m(A, s, m)$ list~float~
-        -_mat_mat_mod_m(A, B, m)$ list~list~float~~
-        -_power_of_two_matrix(n)$ tuple
-        -_advance_nth_by(nth, by, state) void
-    }
-
-    class PhiloxStream {
-        +int PHILOX_M4x64_0$
-        +int PHILOX_M4x64_1$
-        +int PHILOX_W64_0$
-        +int PHILOX_W64_1$
-        +int seed
-        +int stream_idx
-        +int run_idx
-        +list~int~ key
-        +list~int~ counter
-        -list~int~ _buffer
-        +__init__(seed, stream_idx, run_idx)
-        -_mulhilo(a, b) tuple~int, int~
-        -_philox_round() void
-        +rand_u01() float
-    }
-
-    class DataStream {
-        +str filepath
-        +bool loop
-        -deque _buffer
-        -list _initial_data
-        +__init__(filepath, loop)
-        -_load_data() void
-        -_load_from_json() void
-        -_load_from_csv() void
-        +get_next_value() float
-    }
-
-    RandomGenerator "1" *-- "0..*" RngStream : создаёт в _streams
-    RandomGenerator "1" *-- "0..*" PhiloxStream : создаёт в _streams
-    RandomGenerator "1" *-- "0..*" DataStream : создаёт в _streams
 ```
 
 ## 2. Типовой сценарий (AS-IS)
@@ -150,20 +73,62 @@ sequenceDiagram
     end
 ```
 
-## 3. Целевая структура (TO-BE)
+## 3. Целевая структура и UML-диаграмма (TO-BE)
 
-> Не согласовано, см. `docs/features.md` и `docs/spec_FEAT-RNG-001.md`.
-> Внутри самого модуля `RNG.py` архитектура классов (`RandomGenerator`, `RngStream`, `PhiloxStream`, `DataStream`) сохраняется. Предлагаемая схема фабричной инициализации `RandomGenerator` в словаре `rng_instances` на стороне `SimulationManager` показана ниже для согласования с владельцем модуля `SIMULATION_MANAGER`.
+> Отражает план архитектурного рефакторинга по итогам ревью (замена ветвлений на паттерн «Стратегия» и внедрение зависимостей через `Protocol`).
+
+В целевой архитектуре модели получают случайные величины через абстрактный контракт `IRandomSource` (Protocol). Режим чтения файлов (`DataStream`) вынесен из математического генератора. Оркестратор симулятора (`SimulationManager`) управляет резервированием индексов и выступает DI-контейнером.
 
 ```mermaid
-flowchart TB
-    START(["SimulationManager.start_simulation()"]) --> CHECK{"Проверка доменов:\nUE_MODULE, TRAFFIC_MODEL,\nMOBILITY_MODEL, CHANNEL_MODEL"}
-    CHECK --> COND{"Передан dataset_path\nв SimulationConfig?"}
-    COND -->|"Да"| FILE_RNG["RandomGenerator(\nengine='File', filepath=dataset_path)"]
-    COND -->|"Нет"| MATH_RNG["RandomGenerator(\nengine=sim_config.rng_engine)"]
-    FILE_RNG --> SAVE["Сохранение в словарь\nself.rng_instances[module_name]"]
-    MATH_RNG --> SAVE
-    SAVE --> TTI(["Использование в цикле run_tti()"])
+classDiagram
+    class IRandomSource {
+        <<Protocol>>
+        +uniform(min_val, max_val, stream_offset) float
+        +normal(mean, variance, bound, stream_offset) float
+        +exponential(mean, bound, stream_offset) float
+        +get_integer(min_val, max_val, stream_offset) int
+    }
+
+    class SimulationManager {
+        +start_simulation()
+    }
+
+    class AbstractModel {
+        <<Mobility / Channel / Traffic>>
+        -IRandomSource rng
+        +__init__(rng: IRandomSource)
+    }
+
+    class RandomGenerator {
+        +int seed
+        +int base_stream_idx
+        -dict _streams
+        -dict _normal_cache
+        +__init__(seed, base_stream_idx, run_idx, engine)
+    }
+
+    class RngStream {
+        <<MRG32k3a Strategy>>
+        +rand_u01() float
+    }
+
+    class PhiloxStream {
+        <<Philox4x64 Strategy>>
+        +rand_u01() float
+    }
+
+    class DataStream {
+        <<Standalone Dataset Provider>>
+        +get_next_value() float
+    }
+
+    AbstractModel --> IRandomSource : DI (Dependency Injection)
+    SimulationManager ..> RandomGenerator : Создает (Политика индексов)
+    SimulationManager ..> AbstractModel : Внедряет зависимость (rng)
+    RandomGenerator ..|> IRandomSource : Реализует протокол
+    DataStream ..|> IRandomSource : Реализует протокол
+    RandomGenerator "1" *-- "0..*" RngStream : _streams
+    RandomGenerator "1" *-- "0..*" PhiloxStream : _streams
 ```
 
 ## 4. Ссылки на исходники
