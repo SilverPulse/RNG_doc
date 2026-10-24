@@ -65,11 +65,10 @@ flowchart TD
         CORE["Simulation Manager (Ядро)"]
         
         MODS -->|"Ожидает интерфейс (DI)"| PROTOCOL
-        RG ..|> PROTOCOL
-        DS ..|> PROTOCOL
+        RG -.->|"Реализует"| PROTOCOL
+        DS -.->|"Реализует"| PROTOCOL
         CORE -->|"Создает инстанс и внедряет в модель"| RG
     end
-```
 
 ---
 
